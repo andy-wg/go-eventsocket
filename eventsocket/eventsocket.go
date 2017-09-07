@@ -237,7 +237,8 @@ func (h *Connection) readOne() bool {
 		copyHeaders(&hdr, resp, false)
 		h.evt <- resp
 	default:
-		log.Fatal("Unsupported event:", hdr)
+		//log.Fatal("Unsupported event:", hdr)
+		log.Println("Unsupported event:", hdr)
 	}
 	return true
 }
