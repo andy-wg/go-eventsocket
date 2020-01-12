@@ -502,3 +502,47 @@ func (r *Event) PrettyPrint() {
 		fmt.Printf("BODY: %#v\n", r.Body)
 	}
 }
+
+// https://freeswitch.org/confluence/display/FREESWITCH/mod_event_socket#mod_event_socket-3.8sendevent
+func (h *Connection) SendEvent(m MSG, name, appData string) (*Event, error) {
+	b := bytes.NewBufferString("sendevent")
+	if name != "" {
+		// Make sure there's no \r or \n in the UUID.
+		if strings.IndexAny(name, "\r\n") > 0 {
+			return nil, errInvalidCommand
+		}
+		b.WriteString(" " + name)
+	}
+	b.WriteString("\n")
+	for k, v := range m {
+		// Make sure there's no \r or \n in the key, and value.
+		if strings.IndexAny(k, "\r\n") > 0 {
+			return nil, errInvalidCommand
+		}
+		if v != "" {
+			if strings.IndexAny(v, "\r\n") > 0 {
+				return nil, errInvalidCommand
+			}
+			b.WriteString(fmt.Sprintf("%s: %s\n", k, v))
+		}
+	}
+	b.WriteString("\n")
+	if m["content-length"] != "" && appData != "" {
+		b.WriteString(appData)
+	}
+	if _, err := b.WriteTo(h.conn); err != nil {
+		return nil, err
+	}
+	var (
+		ev  *Event
+		err error
+	)
+	select {
+	case err = <-h.err:
+		return nil, err
+	case ev = <-h.cmd:
+		return ev, nil
+	case <-time.After(timeoutPeriod):
+		return nil, errTimeout
+	}
+}
