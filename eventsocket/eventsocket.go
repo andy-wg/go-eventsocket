@@ -29,14 +29,17 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const bufferSize = 1024 << 6 // For the socket reader
 const eventsBuffer = 16      // For the events channel (memory eater!)
+const timeoutPeriod = 60 * time.Second
 
 var errMissingAuthRequest = errors.New("Missing auth request")
 var errInvalidPassword = errors.New("Invalid password")
 var errInvalidCommand = errors.New("Invalid command contains \\r or \\n")
+var errTimeout = errors.New("Timeout")
 
 // Connection is the event socket connection handler.
 type Connection struct {
@@ -226,8 +229,8 @@ func (h *Connection) readOne() bool {
 		for k, v := range tmp {
 			resp.Header[capitalize(k)] = v
 		}
-		if v, _ := resp.Header["_body"]; v != "" {
-			resp.Body = v
+		if v, _ := resp.Header["_body"]; v != nil {
+			resp.Body = v.(string)
 			delete(resp.Header, "_body")
 		} else {
 			resp.Body = ""
@@ -237,7 +240,6 @@ func (h *Connection) readOne() bool {
 		copyHeaders(&hdr, resp, false)
 		h.evt <- resp
 	default:
-		//log.Fatal("Unsupported event:", hdr)
 		log.Println("Unsupported event:", hdr)
 	}
 	return true
@@ -340,6 +342,8 @@ func (h *Connection) Send(command string) (*Event, error) {
 		return ev, nil
 	case ev = <-h.api:
 		return ev, nil
+	case <-time.After(timeoutPeriod):
+		return nil, errTimeout
 	}
 }
 
@@ -407,6 +411,8 @@ func (h *Connection) SendMsg(m MSG, uuid, appData string) (*Event, error) {
 		return nil, err
 	case ev = <-h.cmd:
 		return ev, nil
+	case <-time.After(timeoutPeriod):
+		return nil, errTimeout
 	}
 }
 
@@ -444,7 +450,7 @@ func (h *Connection) ExecuteUUID(uuid, appName, appArg string) (*Event, error) {
 }
 
 // EventHeader represents events as a pair of key:value.
-type EventHeader map[string]string
+type EventHeader map[string]interface{}
 
 // Event represents a FreeSWITCH event.
 type Event struct {
@@ -462,13 +468,20 @@ func (r *Event) String() string {
 
 // Get returns an Event value, or "" if the key doesn't exist.
 func (r *Event) Get(key string) string {
-	return r.Header[key]
+	val, ok := r.Header[key]
+	if !ok || val == nil {
+		return ""
+	}
+	if s, ok := val.([]string); ok {
+		return strings.Join(s, ", ")
+	}
+	return val.(string)
 }
 
 // GetInt returns an Event value converted to int, or an error if conversion
 // is not possible.
 func (r *Event) GetInt(key string) (int, error) {
-	n, err := strconv.Atoi(r.Header[key])
+	n, err := strconv.Atoi(r.Header[key].(string))
 	if err != nil {
 		return 0, err
 	}
